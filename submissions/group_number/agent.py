@@ -1,8 +1,192 @@
+import heapq
+
 import numpy as np
 from collections import deque
 from typing import Tuple, Optional
 from environment import Move
+from agent_interface import PacmanAgent as BasePacmanAgent
 from agent_interface import GhostAgent as BaseGhostAgent
+
+
+class PacmanAgent(BasePacmanAgent):
+    """
+    Pacman (Seeker) Agent - Goal: Catch the Ghost
+
+    Implement your search algorithm to find and catch the ghost.
+    Suggested algorithms: BFS, DFS, A*, Greedy Best-First
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.pacman_speed = max(1, int(kwargs.get("pacman_speed", 1)))
+        self.name = "A* Pacman"
+        # Memory for limited observation mode
+        self.last_known_enemy_pos = None
+
+    def step(self, map_state: np.ndarray,
+             my_position: tuple,
+             enemy_position: tuple,
+             step_number: int):
+        """
+        Decide the next move.
+
+        Args:
+            map_state: 2D numpy array where 1=wall, 0=empty, -1=unseen (fog)
+            my_position: Your current (row, col) in absolute coordinates
+            enemy_position: Ghost's (row, col) if visible, None otherwise
+            step_number: Current step number (starts at 1)
+
+        Returns:
+            Move or (Move, steps): Direction to move (optionally with step count)
+        """
+        # Update memory if enemy is visible
+        if enemy_position is not None:
+            self.last_known_enemy_pos = enemy_position
+
+        # Use current sighting, fallback to last known, or explore
+        target = enemy_position or self.last_known_enemy_pos
+
+        if target is None:
+            # No information about enemy - explore randomly
+            for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
+                if self._is_valid_move(my_position, move, map_state):
+                    return (move, 1)
+            return (Move.STAY, 1)
+
+        # Retrieve path
+        path = self.a_star(my_position, target, map_state)
+        step1 = path[1]
+        step2 = path[2]
+
+        move = Move.STAY
+        step = 1
+
+        if len(path) > 0:
+            if step1[0] == my_position[0]:
+                if step1[1] < my_position[1]:
+                    move = Move.LEFT
+                elif step1[1] > my_position[1]:
+                    move = Move.RIGHT
+                if step2[0] == step1[0]:
+                    step = 2
+            elif step1[1] == my_position[1]:
+                if step1[0] < my_position[0]:
+                    move = Move.UP
+                elif step1[1] > my_position[1]:
+                    move = Move.DOWN
+                if step2[1] == step1[1]:
+                    step = 2
+
+        return (move, step)
+
+    # A* PATHFINDING ALGORITHM
+    def a_star(self, start_pos: tuple, end_pos: tuple, map_state: np.ndarray):
+        frontier_heap = []  # Priority queue (heapq)
+        frontier = set()  # Sort of a tracker for the frontier. Needed because we use lazy deletion when updating the heapq.
+        explored = set()
+
+        # Track parents and costs using dictionaries (i don't know if we're allowed to add a Node class)
+        parent = {start_pos: None}
+        g_cost = {start_pos: 0}
+        h_cost = {start_pos: self._manhattan_distance(start_pos, end_pos)}
+        f_cost = {start_pos: g_cost[start_pos] + h_cost[start_pos]}
+
+        # Push start pos into frontier. Use tuple for priority order (f-cost -> h-cost -> coordinate itself as fallback)
+        heapq.heappush(frontier_heap, (f_cost[start_pos], h_cost[start_pos], start_pos))
+        frontier.add(start_pos)
+
+        # Loop through frontier
+        iterations = 0
+        while frontier and iterations < 128:
+            current_node = heapq.heappop(frontier_heap)[2]
+
+            # Handle phantom nodes left behind by lazy deletion.
+            if current_node not in frontier:
+                continue
+
+            # Found target
+            if current_node == end_pos:
+                path = []
+                while current_node in parent:
+                    path.append(current_node)
+                    current_node = parent[current_node]
+                path.reverse()
+                return path
+
+            # Move node to explored
+            explored.add(current_node)
+            frontier.remove(current_node)
+
+            # Process neighbors
+            neighbors = self._get_neighbors(current_node, map_state)
+            for neighbor in neighbors:
+                if neighbor in explored:
+                    continue
+
+                new_g_cost = g_cost[current_node] + 1
+                if neighbor not in frontier:
+                    h_cost[neighbor] = self._manhattan_distance(neighbor, end_pos)
+                    frontier.add(neighbor)
+                    g_cost[neighbor] = 1024 # Placeholder g-cost for the second if
+
+                if new_g_cost < g_cost[neighbor]:
+                    parent[neighbor] = current_node
+                    g_cost[neighbor] = new_g_cost
+                    f_cost[neighbor] = g_cost[neighbor] + h_cost[neighbor]
+                    heapq.heappush(frontier_heap, (f_cost[neighbor], h_cost[neighbor], neighbor))
+
+            iterations += 1
+
+        # If no path is found
+        print("PACMAN A* FAILED")
+        return []
+
+    # Helper methods
+    def _apply_move(self, pos, move):
+        """Apply a move to a position, return new position."""
+        delta_row, delta_col = move.value
+        return (pos[0] + delta_row, pos[1] + delta_col)
+
+    def _get_neighbors(self, pos, map_state):
+        """Get all valid neighboring positions and their moves."""
+        neighbors = []
+
+        for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
+            next_pos = self._apply_move(pos, move)
+            if self._is_valid_position(next_pos, map_state):
+                neighbors.append(next_pos)
+
+        return neighbors
+
+    def _manhattan_distance(self, pos1, pos2):
+        """Calculate Manhattan distance between two positions."""
+        return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+
+    def _max_valid_steps(self, pos: tuple, move: Move, map_state: np.ndarray, max_steps: int) -> int:
+        steps = 0
+        current = pos
+        for _ in range(max_steps):
+            delta_row, delta_col = move.value
+            next_pos = (current[0] + delta_row, current[1] + delta_col)
+            if not self._is_valid_position(next_pos, map_state):
+                break
+            steps += 1
+            current = next_pos
+        return steps
+
+    def _is_valid_move(self, pos: tuple, move: Move, map_state: np.ndarray) -> bool:
+        """Check if a move from pos is valid for at least one step."""
+        return self._max_valid_steps(pos, move, map_state, 1) == 1
+
+    def _is_valid_position(self, pos: tuple, map_state: np.ndarray) -> bool:
+        """Check if a position is valid (not a wall and within bounds)."""
+        row, col = pos
+        height, width = map_state.shape
+
+        if row < 0 or row >= height or col < 0 or col >= width:
+            return False
+
+        return map_state[row, col] == 0
 
 class GhostAgent(BaseGhostAgent):
     """
