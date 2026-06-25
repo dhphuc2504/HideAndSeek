@@ -72,7 +72,7 @@ class PacmanAgent(BasePacmanAgent):
             elif step1[1] == my_position[1]:
                 if step1[0] < my_position[0]:
                     move = Move.UP
-                elif step1[1] > my_position[1]:
+                elif step1[0] > my_position[0]:
                     move = Move.DOWN
                 if step2[1] == step1[1]:
                     step = 2
