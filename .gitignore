@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Misc
+src/
+.DS_Store
+requirements.txt
+run_game.sh
+STUDENT_GUIDE.md
