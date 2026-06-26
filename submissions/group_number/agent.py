@@ -218,7 +218,6 @@ class GhostAgent(BaseGhostAgent):
             return self.memo[state_key]
         distance = abs(ghost_pos[0] - pacman_pos[0]) + abs(ghost_pos[1] - pacman_pos[1])
         if distance < 2:
-            # Return a massive penalty, but add depth so it prefers dying LATER
             return -99999 + (depth * 1000) 
 
         # Base case evaluation (if depth == 0)
@@ -273,7 +272,6 @@ class GhostAgent(BaseGhostAgent):
         neighbors = []
         height, width = map_state.shape
         
-        # Add STAY as a valid move
         for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT, Move.STAY]:
             r = pos[0] + move.value[0]
             c = pos[1] + move.value[1]
@@ -284,33 +282,42 @@ class GhostAgent(BaseGhostAgent):
         return neighbors
 
     def _get_safe_space_score(self, ghost_pos, pacman_pos, map_state) -> int:
-        # Optimization: Only calculate safe space if Pacman is close
         distance_to_pacman = abs(ghost_pos[0] - pacman_pos[0]) + abs(ghost_pos[1] - pacman_pos[1])
         if distance_to_pacman > 6:
-            return 20 # Arbitrary high score for being safe
+            return 50 # Arbitrary high score for being safe
 
-        queue = deque([ghost_pos])
+        # The queue stores a tuple of (position, last_move_direction)
+        queue = deque([(ghost_pos, None)])
         visited = {ghost_pos} 
-        safe_tiles_count = 0
-        max_search_limit = 20 # Limit BFS to save time
         
-        # Include Pacman's 2-step reach in danger zone!
+        safe_score = 0
+        tiles_explored = 0     # <--- SEPARATE COUNTER FOR THE LIMIT
+        max_search_limit = 20 
+        
         danger_zone = {pacman_pos}
         for dr, dc in [(-1,0), (1,0), (0,-1), (0,1)]:
             r1, c1 = pacman_pos[0] + dr, pacman_pos[1] + dc
             danger_zone.add((r1, c1))
-            danger_zone.add((r1 + dr, c1 + dc)) # 2-step sprint danger
+            danger_zone.add((r1 + dr, c1 + dc)) 
 
-        while queue and safe_tiles_count < max_search_limit:
-            current_pos = queue.popleft()
-            safe_tiles_count += 1
+        # <--- LIMIT BASED ON TILES EXPLORED, NOT THE SCORE
+        while queue and tiles_explored < max_search_limit: 
+            current_pos, last_move = queue.popleft()
+            tiles_explored += 1 
             
-            for next_pos, _ in self._get_neighbors(current_pos, map_state):
+            for next_pos, move in self._get_neighbors(current_pos, map_state):
                 if next_pos not in visited and next_pos not in danger_zone:
                     visited.add(next_pos)
-                    queue.append(next_pos)
+                    queue.append((next_pos, move))
                     
-        return safe_tiles_count
+                    # --- THE CORNER BONUS LOGIC ---
+                    tile_value = 1  
+                    if last_move is not None and move != last_move:
+                        tile_value += 2  # Reward corners!
+                        
+                    safe_score += tile_value # Add to score, but doesn't trigger the limit early
+                    
+        return safe_score
 
     def step(self, map_state: np.ndarray, 
              my_position: Tuple[int, int], 
