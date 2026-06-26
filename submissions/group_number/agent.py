@@ -190,166 +190,132 @@ class PacmanAgent(BasePacmanAgent):
 
 class GhostAgent(BaseGhostAgent):
     """
-    The Ghost Agent utilizing BFS safe-space heuristics and Manhattan distance.
+    God-Mode Ghost Agent.
+    Uses APSP for instant distance calculations, Minimax for perfect 
+    2-step Pacman prediction, and Topology to avoid distant dead ends.
     """
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.max_depth = 4
-        self.memo = {}
+        self.max_depth = 5 
+        self.apsp = None
+        self.map_shape = None
+        self.last_pos = None
 
-    def _evaluate_state(self, ghost_pos: Tuple[int, int], pacman_pos: Tuple[int, int], map_state: np.ndarray) -> float:
-        """Calculates the desirability of a board state for the Ghost."""
-        distance = abs(ghost_pos[0] - pacman_pos[0]) + abs(ghost_pos[1] - pacman_pos[1])
+    def _compute_apsp(self, map_state: np.ndarray):
+        """Precomputes EXACT maze distances between EVERY empty tile on the map."""
+        h, w = map_state.shape
+        self.map_shape = (h, w)
+        self.apsp = {}
         
-        # If Pacman is close enough to catch us, this is the worst possible state
-        if distance < 2:
-            return -float('inf')
+        for r in range(h):
+            for c in range(w):
+                if map_state[r, c] == 0:
+                    dist = np.full((h, w), 9999, dtype=int)
+                    dist[r, c] = 0
+                    queue = deque([(r, c)])
+                    
+                    while queue:
+                        curr_r, curr_c = queue.popleft()
+                        d = dist[curr_r, curr_c]
+                        for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
+                            nr, nc = curr_r + move.value[0], curr_c + move.value[1]
+                            if 0 <= nr < h and 0 <= nc < w and map_state[nr, nc] == 0:
+                                if dist[nr, nc] == 9999:
+                                    dist[nr, nc] = d + 1
+                                    queue.append((nr, nc))
+                    self.apsp[(r, c)] = dist
+
+    def _get_topology_score(self, pos: Tuple[int, int], map_state: np.ndarray) -> float:
+        """Evaluates the shape of the current tile to encourage turning and avoid traps."""
+        valid_moves = 0
+        for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
+            r, c = pos[0] + move.value[0], pos[1] + move.value[1]
+            if 0 <= r < self.map_shape[0] and 0 <= c < self.map_shape[1] and map_state[r, c] == 0:
+                valid_moves += 1
+                
+        if valid_moves >= 3:
+            return 20  # Bonus for intersections!
+        elif valid_moves == 1:
+            return -100 # Huge penalty for dead ends!
+        return 0
+
+    def _minimax(self, ghost_pos, pacman_pos, depth, is_maximizing, alpha, beta, map_state):
+        dist = self.apsp[ghost_pos][pacman_pos[0], pacman_pos[1]]
+        
+        # === THE BUG FIX ===
+        # Minus (depth * 1000). Now, dying immediately (Depth 4) gives -104,000. 
+        # Dying later (Depth 2) gives -102,000. It will correctly prefer to survive!
+        if dist <= 1:
+            return -99999 - (depth * 1000) + dist
             
-        safe_space = self._get_safe_space_score(ghost_pos, pacman_pos, map_state)
-        
-        # Combine metrics: Distance is good, but mobility (safe space) prevents traps
-        return (distance * 10) + safe_space
-    
-    def _minimax(self, ghost_pos, pacman_pos, depth, is_maximizing, map_state, alpha, beta) -> float:
-        # Create a unique key for the current state
-        state_key = (ghost_pos, pacman_pos, depth, is_maximizing)
-        if state_key in self.memo:
-            return self.memo[state_key]
-        distance = abs(ghost_pos[0] - pacman_pos[0]) + abs(ghost_pos[1] - pacman_pos[1])
-        if distance < 2:
-            return -99999 + (depth * 1000) 
-
-        # Base case evaluation (if depth == 0)
+        # Base case: Reached depth limit. 
         if depth == 0:
-            return self._evaluate_state(ghost_pos, pacman_pos, map_state)
-        """Recursive Minimax with Alpha-Beta Pruning."""
-        
+            return (dist * 10) + self._get_topology_score(ghost_pos, map_state)
+            
         if is_maximizing:
-            # GHOST'S TURN: Maximize the score
             max_eval = -float('inf')
-            for next_pos, _ in self._get_neighbors(ghost_pos, map_state):
-                eval_score = self._minimax(next_pos, pacman_pos, depth - 1, False, map_state, alpha, beta)
-                max_eval = max(max_eval, eval_score)
-                alpha = max(alpha, eval_score)
-                if beta <= alpha:
-                    break  # Beta pruning: Pacman would never allow this branch
-            self.memo[state_key] = max_eval
-            return max_eval
+            for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
+                r, c = ghost_pos[0] + move.value[0], ghost_pos[1] + move.value[1]
+                if 0 <= r < self.map_shape[0] and 0 <= c < self.map_shape[1] and map_state[r, c] == 0:
+                    eval_score = self._minimax((r, c), pacman_pos, depth - 1, False, alpha, beta, map_state)
+                    max_eval = max(max_eval, eval_score)
+                    alpha = max(alpha, eval_score)
+                    if beta <= alpha: 
+                        break
+            return max_eval if max_eval != -float('inf') else -99999
             
         else:
-            # PACMAN'S TURN: Minimize the score
             min_eval = float('inf')
-            height, width = map_state.shape
-            
-            for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT, Move.STAY]:
-                dr, dc = move.value
-                
-                # Check 1-step move
-                r1, c1 = pacman_pos[0] + dr, pacman_pos[1] + dc
-                
-                if (0 <= r1 < height) and (0 <= c1 < width) and map_state[r1, c1] != 1:
-                    # Simulate Pacman taking just 1 step
-                    eval_score1 = self._minimax(ghost_pos, (r1, c1), depth - 1, True, map_state, alpha, beta)
+            for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
+                r1, c1 = pacman_pos[0] + move.value[0], pacman_pos[1] + move.value[1]
+                if 0 <= r1 < self.map_shape[0] and 0 <= c1 < self.map_shape[1] and map_state[r1, c1] == 0:
+                    
+                    # Pacman takes 1 step 
+                    eval_score1 = self._minimax(ghost_pos, (r1, c1), depth - 1, True, alpha, beta, map_state)
                     min_eval = min(min_eval, eval_score1)
                     
-                    # Check 2-step straight-line sprint
-                    r2, c2 = r1 + dr, c1 + dc
-                    if (0 <= r2 < height) and (0 <= c2 < width) and map_state[r2, c2] != 1:
-                        # Simulate Pacman taking the full 2 steps
-                        eval_score2 = self._minimax(ghost_pos, (r2, c2), depth - 1, True, map_state, alpha, beta)
+                    # Pacman takes 2 steps IN A STRAIGHT LINE
+                    r2, c2 = r1 + move.value[0], c1 + move.value[1]
+                    if 0 <= r2 < self.map_shape[0] and 0 <= c2 < self.map_shape[1] and map_state[r2, c2] == 0:
+                        eval_score2 = self._minimax(ghost_pos, (r2, c2), depth - 1, True, alpha, beta, map_state)
                         min_eval = min(min_eval, eval_score2)
-                
-                # Standard Alpha-Beta Pruning
-                beta = min(beta, min_eval)
-                if beta <= alpha:
-                    break
-                    
-            self.memo[state_key] = min_eval
-            return min_eval
-    
-    def _get_neighbors(self, pos: Tuple[int, int], map_state: np.ndarray):
-        neighbors = []
-        height, width = map_state.shape
-        
-        for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT, Move.STAY]:
-            r = pos[0] + move.value[0]
-            c = pos[1] + move.value[1]
-            
-            if 0 <= r < height and 0 <= c < width and map_state[r, c] != 1:
-                neighbors.append(((r, c), move))
-                
-        return neighbors
-
-    def _get_safe_space_score(self, ghost_pos, pacman_pos, map_state) -> int:
-        distance_to_pacman = abs(ghost_pos[0] - pacman_pos[0]) + abs(ghost_pos[1] - pacman_pos[1])
-        if distance_to_pacman > 6:
-            return 50 # Arbitrary high score for being safe
-
-        # The queue stores a tuple of (position, last_move_direction)
-        queue = deque([(ghost_pos, None)])
-        visited = {ghost_pos} 
-        
-        safe_score = 0
-        tiles_explored = 0     # <--- SEPARATE COUNTER FOR THE LIMIT
-        max_search_limit = 20 
-        
-        danger_zone = {pacman_pos}
-        for dr, dc in [(-1,0), (1,0), (0,-1), (0,1)]:
-            r1, c1 = pacman_pos[0] + dr, pacman_pos[1] + dc
-            danger_zone.add((r1, c1))
-            danger_zone.add((r1 + dr, c1 + dc)) 
-
-        # <--- LIMIT BASED ON TILES EXPLORED, NOT THE SCORE
-        while queue and tiles_explored < max_search_limit: 
-            current_pos, last_move = queue.popleft()
-            tiles_explored += 1 
-            
-            for next_pos, move in self._get_neighbors(current_pos, map_state):
-                if next_pos not in visited and next_pos not in danger_zone:
-                    visited.add(next_pos)
-                    queue.append((next_pos, move))
-                    
-                    # --- THE CORNER BONUS LOGIC ---
-                    tile_value = 1  
-                    if last_move is not None and move != last_move:
-                        tile_value += 2  # Reward corners!
                         
-                    safe_score += tile_value # Add to score, but doesn't trigger the limit early
-                    
-        return safe_score
+                beta = min(beta, min_eval)
+                if beta <= alpha: 
+                    break
+            return min_eval
 
     def step(self, map_state: np.ndarray, 
              my_position: Tuple[int, int], 
              enemy_position: Optional[Tuple[int, int]],
              step_number: int) -> Move:
-        self.memo.clear()
+             
         if enemy_position is None:
             return Move.STAY
-        
+            
+        if self.apsp is None:
+            self._compute_apsp(map_state)
+            
         best_move = Move.STAY
-        highest_score = -float('inf')
-        
-        # Initialize Alpha and Beta limits
+        best_score = -float('inf')
         alpha = -float('inf')
         beta = float('inf')
         
-        # Evaluate all 4 possible movement directions
         for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
-            delta_row, delta_col = move.value
-            next_pos = (my_position[0] + delta_row, my_position[1] + delta_col)
-            
-            height, width = map_state.shape
-            if (0 <= next_pos[0] < height) and (0 <= next_pos[1] < width) and map_state[next_pos[0], next_pos[1]] != 1:
+            r, c = my_position[0] + move.value[0], my_position[1] + move.value[1]
+            if 0 <= r < self.map_shape[0] and 0 <= c < self.map_shape[1] and map_state[r, c] == 0:
                 
-                # Ghost just moved, so the next layer of the tree is Pacman's turn (is_maximizing = False)
-                score = self._minimax(next_pos, enemy_position, self.max_depth - 1, False, map_state, alpha, beta)
+                score = self._minimax((r, c), enemy_position, self.max_depth - 1, False, alpha, beta, map_state)
                 
-                if score > highest_score:
-                    highest_score = score
+                if self.last_pos is not None and (r, c) == self.last_pos:
+                    score -= 0.1 
+                
+                if score > best_score:
+                    best_score = score
                     best_move = move
+                    
+                alpha = max(alpha, best_score)
                 
-                # Update alpha for the root layer
-                alpha = max(alpha, highest_score)
-                        
+        self.last_pos = my_position
         return best_move
