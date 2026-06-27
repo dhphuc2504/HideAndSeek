@@ -9,19 +9,10 @@ from agent_interface import GhostAgent as BaseGhostAgent
 
 
 class PacmanAgent(BasePacmanAgent):
-    """
-    Pacman (Seeker) Agent - Goal: Catch the Ghost
-
-    Implement your search algorithm to find and catch the ghost.
-    Suggested algorithms: BFS, DFS, A*, Greedy Best-First
-    """
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.pacman_speed = max(1, int(kwargs.get("pacman_speed", 1)))
         self.name = "A* Pacman"
-        # Memory for limited observation mode
-        self.last_known_enemy_pos = None
 
     def step(self, map_state: np.ndarray,
              my_position: tuple,
@@ -39,22 +30,8 @@ class PacmanAgent(BasePacmanAgent):
         Returns:
             Move or (Move, steps): Direction to move (optionally with step count)
         """
-        # Update memory if enemy is visible
-        if enemy_position is not None:
-            self.last_known_enemy_pos = enemy_position
-
-        # Use current sighting, fallback to last known, or explore
-        target = enemy_position or self.last_known_enemy_pos
-
-        if target is None:
-            # No information about enemy - explore randomly
-            for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
-                if self._is_valid_move(my_position, move, map_state):
-                    return (move, 1)
-            return (Move.STAY, 1)
-
         # Retrieve path
-        path = self.a_star(my_position, target, map_state)
+        path = self.a_star(my_position, enemy_position, map_state)
 
         move = Move.STAY
         step = 1
@@ -102,7 +79,7 @@ class PacmanAgent(BasePacmanAgent):
         while frontier:
             current_node = heapq.heappop(frontier_heap)[2]
 
-            # Handle phantom nodes left behind by lazy deletion.
+            # Handle old duplicates left behind by lazy deletion.
             if current_node not in frontier:
                 continue
 
@@ -175,10 +152,6 @@ class PacmanAgent(BasePacmanAgent):
             steps += 1
             current = next_pos
         return steps
-
-    def _is_valid_move(self, pos: tuple, move: Move, map_state: np.ndarray) -> bool:
-        """Check if a move from pos is valid for at least one step."""
-        return self._max_valid_steps(pos, move, map_state, 1) == 1
 
     def _is_valid_position(self, pos: tuple, map_state: np.ndarray) -> bool:
         """Check if a position is valid (not a wall and within bounds)."""
