@@ -55,27 +55,29 @@ class PacmanAgent(BasePacmanAgent):
 
         # Retrieve path
         path = self.a_star(my_position, target, map_state)
-        step1 = path[1]
-        step2 = path[2]
 
         move = Move.STAY
         step = 1
 
-        if len(path) > 0:
+        if len(path) > 1:
+            step1 = path[1]
+
             if step1[0] == my_position[0]:
                 if step1[1] < my_position[1]:
                     move = Move.LEFT
                 elif step1[1] > my_position[1]:
                     move = Move.RIGHT
-                if step2[0] == step1[0]:
-                    step = 2
             elif step1[1] == my_position[1]:
                 if step1[0] < my_position[0]:
                     move = Move.UP
                 elif step1[0] > my_position[0]:
                     move = Move.DOWN
-                if step2[1] == step1[1]:
+
+            if len(path) > 2:
+                step2 = path[2]
+                if (step1[0] == my_position[0] and step2[0] == step1[0]) or (step1[1] == my_position[1] and step2[1] == step1[1]):
                     step = 2
+
 
         return (move, step)
 
@@ -97,15 +99,15 @@ class PacmanAgent(BasePacmanAgent):
 
         # Loop through frontier
         iterations = 0
-        while frontier and iterations < 128:
+        while frontier:
             current_node = heapq.heappop(frontier_heap)[2]
 
             # Handle phantom nodes left behind by lazy deletion.
             if current_node not in frontier:
                 continue
 
-            # Found target
-            if current_node == end_pos:
+            # Found target or reached max iterations
+            if current_node == end_pos or iterations >= 128:
                 path = []
                 while current_node in parent:
                     path.append(current_node)
