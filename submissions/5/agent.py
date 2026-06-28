@@ -161,14 +161,13 @@ class PacmanAgent(BasePacmanAgent):
 
 class GhostAgent(BaseGhostAgent):
     """
-    God-Mode Ghost Agent.
     Uses BFS for instant distance calculations, Minimax for perfect 
     2-step Pacman prediction, and Topology to avoid distant dead ends.
     """
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.max_depth = 5 
+        self.max_depth = 4 
         self.map_shape = None
         self.last_pos = None    
 
@@ -199,25 +198,27 @@ class GhostAgent(BaseGhostAgent):
                 valid_moves += 1
                 
         if valid_moves >= 3:
-            return 20  # Bonus for intersections!
+            return 20  # Bonus for intersections
         elif valid_moves <= 1:
-            return -100 # Huge penalty for dead ends!
+            return -100 # Huge penalty for dead ends
         return 0
 
     def _minimax(self, ghost_pos, pacman_pos, depth, is_maximizing, alpha, beta, map_state, dist_matrix):
         dist = dist_matrix[ghost_pos[0], ghost_pos[1]]
+        sim_dist = abs(ghost_pos[0] - pacman_pos[0]) + abs(ghost_pos[1] - pacman_pos[1])
         
-        # === THE BUG FIX ===
-        # Minus (depth * 1000). Now, dying immediately (Depth 4) gives -104,000. 
-        # Dying later (Depth 2) gives -102,000. It will correctly prefer to survive!
-        if dist <= 1:
-            return -99999 - (depth * 1000) + dist
+        # Check if the SIMULATED Pacman caught us
+        # Minus (depth * 1000). Dying immediately (Depth 4) gives -104,000. 
+        # Dying later (Depth 2) gives -102,000. 
+        # It will prefer to survive
+        if sim_dist <= 1:
+            return -99999 - (depth * 1000) + sim_dist
             
         # Base case: Reached depth limit. 
         if depth == 0:
             return (dist * 10) + self._get_topology_score(ghost_pos, map_state)
             
-        if is_maximizing:
+        if is_maximizing: 
             max_eval = -float('inf')
             for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
                 r, c = ghost_pos[0] + move.value[0], ghost_pos[1] + move.value[1]
@@ -239,7 +240,7 @@ class GhostAgent(BaseGhostAgent):
                     eval_score1 = self._minimax(ghost_pos, (r1, c1), depth - 1, True, alpha, beta, map_state, dist_matrix)
                     min_eval = min(min_eval, eval_score1)
                     
-                    # Pacman takes 2 steps IN A STRAIGHT LINE
+                    # Pacman takes 2 steps in a straight line
                     r2, c2 = r1 + move.value[0], c1 + move.value[1]
                     if 0 <= r2 < self.map_shape[0] and 0 <= c2 < self.map_shape[1] and map_state[r2, c2] == 0:
                         eval_score2 = self._minimax(ghost_pos, (r2, c2), depth - 1, True, alpha, beta, map_state, dist_matrix)
