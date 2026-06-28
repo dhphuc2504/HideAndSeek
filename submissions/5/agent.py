@@ -1,11 +1,11 @@
 import heapq
-
 import numpy as np
 from collections import deque
 from typing import Tuple, Optional
 from environment import Move
 from agent_interface import PacmanAgent as BasePacmanAgent
 from agent_interface import GhostAgent as BaseGhostAgent
+from functools import wraps
 
 
 class PacmanAgent(BasePacmanAgent):
@@ -166,40 +166,33 @@ class PacmanAgent(BasePacmanAgent):
 class GhostAgent(BaseGhostAgent):
     """
     God-Mode Ghost Agent.
-    Uses APSP for instant distance calculations, Minimax for perfect 
+    Uses BFS for instant distance calculations, Minimax for perfect 
     2-step Pacman prediction, and Topology to avoid distant dead ends.
     """
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.max_depth = 5 
-        self.apsp = None
         self.map_shape = None
-        self.last_pos = None
+        self.last_pos = None    
 
-    def _compute_apsp(self, map_state: np.ndarray):
-        """Precomputes EXACT maze distances between EVERY empty tile on the map."""
-        h, w = map_state.shape
-        self.map_shape = (h, w)
-        self.apsp = {}
+    def _get_pacman_distances(self, pacman_pos: Tuple[int, int], map_state: np.ndarray) -> np.ndarray:
+        """Precomputes EXACT maze distances from Pacman to EVERY empty tile on the map."""
+        h, w = self.map_shape
+        dist = np.full((h, w), 9999, dtype=int)
+        dist[pacman_pos[0], pacman_pos[1]] = 0
+        queue = deque([pacman_pos])
         
-        for r in range(h):
-            for c in range(w):
-                if map_state[r, c] == 0:
-                    dist = np.full((h, w), 9999, dtype=int)
-                    dist[r, c] = 0
-                    queue = deque([(r, c)])
-                    
-                    while queue:
-                        curr_r, curr_c = queue.popleft()
-                        d = dist[curr_r, curr_c]
-                        for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
-                            nr, nc = curr_r + move.value[0], curr_c + move.value[1]
-                            if 0 <= nr < h and 0 <= nc < w and map_state[nr, nc] == 0:
-                                if dist[nr, nc] == 9999:
-                                    dist[nr, nc] = d + 1
-                                    queue.append((nr, nc))
-                    self.apsp[(r, c)] = dist
+        while queue:
+            curr_r, curr_c = queue.popleft()
+            d = dist[curr_r, curr_c]
+            for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
+                nr, nc = curr_r + move.value[0], curr_c + move.value[1]
+                if 0 <= nr < h and 0 <= nc < w and map_state[nr, nc] == 0:
+                    if dist[nr, nc] == 9999:
+                        dist[nr, nc] = d + 1
+                        queue.append((nr, nc))
+        return dist
 
     def _get_topology_score(self, pos: Tuple[int, int], map_state: np.ndarray) -> float:
         """Evaluates the shape of the current tile to encourage turning and avoid traps."""
@@ -211,12 +204,12 @@ class GhostAgent(BaseGhostAgent):
                 
         if valid_moves >= 3:
             return 20  # Bonus for intersections!
-        elif valid_moves == 1:
+        elif valid_moves <= 1:
             return -100 # Huge penalty for dead ends!
         return 0
 
-    def _minimax(self, ghost_pos, pacman_pos, depth, is_maximizing, alpha, beta, map_state):
-        dist = self.apsp[ghost_pos][pacman_pos[0], pacman_pos[1]]
+    def _minimax(self, ghost_pos, pacman_pos, depth, is_maximizing, alpha, beta, map_state, dist_matrix):
+        dist = dist_matrix[ghost_pos[0], ghost_pos[1]]
         
         # === THE BUG FIX ===
         # Minus (depth * 1000). Now, dying immediately (Depth 4) gives -104,000. 
@@ -233,7 +226,7 @@ class GhostAgent(BaseGhostAgent):
             for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
                 r, c = ghost_pos[0] + move.value[0], ghost_pos[1] + move.value[1]
                 if 0 <= r < self.map_shape[0] and 0 <= c < self.map_shape[1] and map_state[r, c] == 0:
-                    eval_score = self._minimax((r, c), pacman_pos, depth - 1, False, alpha, beta, map_state)
+                    eval_score = self._minimax((r, c), pacman_pos, depth - 1, False, alpha, beta, map_state, dist_matrix)
                     max_eval = max(max_eval, eval_score)
                     alpha = max(alpha, eval_score)
                     if beta <= alpha: 
@@ -247,13 +240,13 @@ class GhostAgent(BaseGhostAgent):
                 if 0 <= r1 < self.map_shape[0] and 0 <= c1 < self.map_shape[1] and map_state[r1, c1] == 0:
                     
                     # Pacman takes 1 step 
-                    eval_score1 = self._minimax(ghost_pos, (r1, c1), depth - 1, True, alpha, beta, map_state)
+                    eval_score1 = self._minimax(ghost_pos, (r1, c1), depth - 1, True, alpha, beta, map_state, dist_matrix)
                     min_eval = min(min_eval, eval_score1)
                     
                     # Pacman takes 2 steps IN A STRAIGHT LINE
                     r2, c2 = r1 + move.value[0], c1 + move.value[1]
                     if 0 <= r2 < self.map_shape[0] and 0 <= c2 < self.map_shape[1] and map_state[r2, c2] == 0:
-                        eval_score2 = self._minimax(ghost_pos, (r2, c2), depth - 1, True, alpha, beta, map_state)
+                        eval_score2 = self._minimax(ghost_pos, (r2, c2), depth - 1, True, alpha, beta, map_state, dist_matrix)
                         min_eval = min(min_eval, eval_score2)
                         
                 beta = min(beta, min_eval)
@@ -269,8 +262,8 @@ class GhostAgent(BaseGhostAgent):
         if enemy_position is None:
             return Move.STAY
             
-        if self.apsp is None:
-            self._compute_apsp(map_state)
+        self.map_shape = map_state.shape
+        dist_matrix = self._get_pacman_distances(enemy_position, map_state)
             
         best_move = Move.STAY
         best_score = -float('inf')
@@ -281,7 +274,7 @@ class GhostAgent(BaseGhostAgent):
             r, c = my_position[0] + move.value[0], my_position[1] + move.value[1]
             if 0 <= r < self.map_shape[0] and 0 <= c < self.map_shape[1] and map_state[r, c] == 0:
                 
-                score = self._minimax((r, c), enemy_position, self.max_depth - 1, False, alpha, beta, map_state)
+                score = self._minimax((r, c), enemy_position, self.max_depth - 1, False, alpha, beta, map_state, dist_matrix)
                 
                 if self.last_pos is not None and (r, c) == self.last_pos:
                     score -= 0.1 
