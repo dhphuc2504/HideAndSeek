@@ -30,33 +30,41 @@ class PacmanAgent(BasePacmanAgent):
         Returns:
             Move or (Move, steps): Direction to move (optionally with step count)
         """
-        # Retrieve path
-        path = self.a_star(my_position, enemy_position, map_state)
+        try:
+            path = self.a_star(my_position, enemy_position, map_state)
 
-        move = Move.STAY
-        step = 1
+            move = Move.STAY
+            step = 1
 
-        if len(path) > 1:
-            step1 = path[1]
+            if len(path) > 1:
+                step1 = path[1]
 
-            if step1[0] == my_position[0]:
-                if step1[1] < my_position[1]:
-                    move = Move.LEFT
-                elif step1[1] > my_position[1]:
-                    move = Move.RIGHT
-            elif step1[1] == my_position[1]:
-                if step1[0] < my_position[0]:
-                    move = Move.UP
-                elif step1[0] > my_position[0]:
-                    move = Move.DOWN
+                if step1[0] == my_position[0]:
+                    if step1[1] < my_position[1]:
+                        move = Move.LEFT
+                    elif step1[1] > my_position[1]:
+                        move = Move.RIGHT
+                elif step1[1] == my_position[1]:
+                    if step1[0] < my_position[0]:
+                        move = Move.UP
+                    elif step1[0] > my_position[0]:
+                        move = Move.DOWN
 
-            if len(path) > 2:
-                step2 = path[2]
-                if (step1[0] == my_position[0] and step2[0] == step1[0]) or (step1[1] == my_position[1] and step2[1] == step1[1]):
-                    step = 2
+                if len(path) > 2:
+                    step2 = path[2]
+                    if (step1[0] == my_position[0] and step2[0] == step1[0]) or (step1[1] == my_position[1] and step2[1] == step1[1]):
+                        step = 2
 
+            return (move, step)
+        except Exception as e:
+            # Fallback
+            for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
+                next_pos = self._apply_move(my_position, move)
+                if self._is_valid_position(next_pos, map_state):
+                    return (move, 1)
 
-        return (move, step)
+            return (Move.STAY, 1)
+
 
     # A* PATHFINDING ALGORITHM
     def a_star(self, start_pos: tuple, end_pos: tuple, map_state: np.ndarray):
@@ -140,18 +148,6 @@ class PacmanAgent(BasePacmanAgent):
     def _manhattan_distance(self, pos1, pos2):
         """Calculate Manhattan distance between two positions."""
         return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
-
-    def _max_valid_steps(self, pos: tuple, move: Move, map_state: np.ndarray, max_steps: int) -> int:
-        steps = 0
-        current = pos
-        for _ in range(max_steps):
-            delta_row, delta_col = move.value
-            next_pos = (current[0] + delta_row, current[1] + delta_col)
-            if not self._is_valid_position(next_pos, map_state):
-                break
-            steps += 1
-            current = next_pos
-        return steps
 
     def _is_valid_position(self, pos: tuple, map_state: np.ndarray) -> bool:
         """Check if a position is valid (not a wall and within bounds)."""
