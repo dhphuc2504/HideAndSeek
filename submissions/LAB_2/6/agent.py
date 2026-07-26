@@ -21,6 +21,8 @@ class GhostAgent(BaseGhostAgent):
         self.turns_since_seen = 999
         self.current_hideout = None
 
+        self.last_pos = None
+
     def _update_memory(self, local_map_state: np.ndarray):
         """
         Overlays the visible local map onto the global memory map.
@@ -77,17 +79,21 @@ class GhostAgent(BaseGhostAgent):
         if self.turns_since_seen == 0:
             # STATE: SPOTTED! PACMAN IS IN VISION!
             # Objective: Break Line of Sight immediately.
-            return self._execute_panic_flee(my_position, enemy_position)
+            best_move = self._execute_panic_flee(my_position, enemy_position)
             
         elif self.turns_since_seen < 4:
             # STATE: PARANOID. We just broke vision, but Pacman is close.
             # Objective: Keep moving away from his last known location.
-            return self._execute_relocate(my_position)
+            best_move = self._execute_relocate(my_position)
             
         else:
             # STATE: HIDDEN. Pacman has no idea where we are.
             # Objective: Find a dark corner/intersection, go there, and STAY.
-            return self._execute_hide(my_position)
+            best_move = self._execute_hide(my_position)
+
+
+        self.last_pos = my_position
+        return best_move
 
     def _execute_panic_flee(self, my_pos: Tuple[int, int], pacman_pos: Tuple[int, int]) -> Move:
         """
@@ -180,3 +186,24 @@ class GhostAgent(BaseGhostAgent):
             return valid_moves[0]
             
         return Move.STAY
+
+    def _fallback_flee(self, my_pos: Tuple[int, int], pacman_pos: Tuple[int, int]) -> Move:
+        """
+        If we can't break Line of Sight, run away through confirmed safe paths.
+        """
+        best_move = Move.STAY
+        best_dist = -1
+        
+        for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
+            nr, nc = my_pos[0] + move.value[0], my_pos[1] + move.value[1]
+            if 0 <= nr < 21 and 0 <= nc < 21:
+                # STRICT COMPLIANCE: Never assume -1 is safe! Only walk on 0.
+                if self.memory_map[nr, nc] == 0:
+                    dist = abs(nr - pacman_pos[0]) + abs(nc - pacman_pos[1])
+                    if dist > best_dist:
+                        # Prevent 180-degree backtracking into Pacman
+                        if self.last_pos is None or (nr, nc) != self.last_pos:
+                            best_dist = dist
+                            best_move = move
+                            
+        return best_move
