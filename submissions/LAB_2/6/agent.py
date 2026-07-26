@@ -89,9 +89,6 @@ class GhostAgent(BaseGhostAgent):
             # Objective: Find a dark corner/intersection, go there, and STAY.
             return self._execute_hide(my_position)
 
-
-    # --- PLACEHOLDERS FOR OUR 3 BEHAVIORS ---
-
     def _execute_panic_flee(self, my_pos: Tuple[int, int], pacman_pos: Tuple[int, int]) -> Move:
         """
         Emergency evasion. Pacman sees us.
@@ -164,5 +161,22 @@ class GhostAgent(BaseGhostAgent):
         return best_move
 
     def _execute_hide(self, my_pos: Tuple[int, int]) -> Move:
-        # TODO: Implement hideout searching
+        """
+        Goal: Stand perfectly still to avoid accidental encounters, UNLESS we are in a dead end.
+        Strictly only evaluates KNOWN empty tiles (0) to satisfy partial observability rules.
+        """
+        valid_moves = []
+        for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
+            nr, nc = my_pos[0] + move.value[0], my_pos[1] + move.value[1]
+            if 0 <= nr < 21 and 0 <= nc < 21:
+                # STRICT COMPLIANCE: Only look at confirmed safe paths
+                if self.memory_map[nr, nc] == 0: 
+                    valid_moves.append(move)
+
+        if len(valid_moves) >= 2:
+            return Move.STAY
+            
+        if len(valid_moves) == 1:
+            return valid_moves[0]
+            
         return Move.STAY
