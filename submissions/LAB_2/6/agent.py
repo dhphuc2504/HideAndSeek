@@ -312,7 +312,7 @@ class PacmanAgent(BasePacmanAgent):
         self.name = "Optimized Heatseeking Pacman"
         
         # Heatmap for tracking the Ghost
-        self.heatmap = np.zeros((21, 21), float)
+        self.heatmap = np.ones((21, 21), float)
         self.kernel = ((0.0, 0.2, 0.0),
                        (0.2, 0.2, 0.2),
                        (0.0, 0.2, 0.0),)
