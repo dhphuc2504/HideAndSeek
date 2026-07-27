@@ -15,8 +15,7 @@ class PacmanAgent(BasePacmanAgent):
         self.heatmap = np.zeros((21, 21), float)
         self.kernel = ((0.0, 0.2, 0.0),
                        (0.2, 0.2, 0.2),
-                       (0.0, 0.2, 0.0),)
-        # Memory for limited observation mode
+                       (0.0, 0.2, 0.0))
         self.current_target = None
         self.visit_count = np.zeros((21, 21), dtype=int)
 
@@ -51,7 +50,6 @@ class PacmanAgent(BasePacmanAgent):
                 least_visited = [tuple(t) for t in non_wall_tiles if self.visit_count[t[0], t[1]] == min_visits]
                 global_fallback = min(least_visited, key=lambda c: self._manhattan_distance(c, my_position))
                 # Include visit_count in comparison key to prevent oscillations
-                # (Doesn't work anymore for some reason. Will revisit for final submission)
                 self.current_target = min(gateway_candidates, key=lambda c: self._manhattan_distance(c, global_fallback) + self.visit_count[c] * 5)
 
             # Find path
@@ -79,9 +77,10 @@ class PacmanAgent(BasePacmanAgent):
 
                 if len(path) > 2:
                     step2 = path[2]
-                    if (step1[0] == my_position[0] and step2[0] == step1[0]) or (
-                            step1[1] == my_position[1] and step2[1] == step1[1]):
+                    if (step1[0] == my_position[0] and step2[0] == step1[0]) or (step1[1] == my_position[1] and step2[1] == step1[1]):
                         step = 2
+                        # Pre-emptively increment visit count for first tile, which will be jumped over
+                        self.visit_count[step1] += 1
 
             return (move, step)
 
@@ -105,8 +104,8 @@ class PacmanAgent(BasePacmanAgent):
             # Decay
             self.heatmap *= 0.9
             # Diffusion
-            P = np.pad(self.heatmap, 1, mode='constant', constant_values=0)
-            self.heatmap = 0.2 * (P[1:-1, 1:-1] + P[:-2, 1:-1] + P[2:, 1:-1] + P[1:-1, :-2] + P[1:-1, 2:])
+            padded = np.pad(self.heatmap, 1, mode='constant', constant_values=0)
+            self.heatmap = 0.2 * (padded[1:-1, 1:-1] + padded[:-2, 1:-1] + padded[2:, 1:-1] + padded[1:-1, :-2] + padded[1:-1, 2:])
             # Clear heat from seen paths and walls
             visible_mask = map_state != -1
             self.heatmap[visible_mask] = 0.0
@@ -116,7 +115,7 @@ class PacmanAgent(BasePacmanAgent):
         frontier = set()  # Sort of a tracker for the frontier. Needed because we use lazy deletion when updating the heapq.
         explored = set()
 
-        # Track parents and costs using dictionaries (i don't know if we're allowed to add a Node class)
+        # Track parents and costs using dictionaries
         parent = {start_pos: None}
         g_cost = {start_pos: 0}
         h_cost = {start_pos: self._manhattan_distance(start_pos, end_pos)}
