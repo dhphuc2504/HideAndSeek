@@ -304,163 +304,154 @@ class GhostAgent(BaseGhostAgent):
                             best_move = move
                             
         return best_move
-    
+
+
 class PacmanAgent(BasePacmanAgent):
+    """
+    Pacman (Seeker) Agent - Goal: Catch the Ghost
+
+    Implement your search algorithm to find and catch the ghost.
+    Suggested algorithms: BFS, DFS, A*, Greedy Best-First
+    """
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.pacman_speed = max(1, int(kwargs.get("pacman_speed", 1)))
-        self.name = "Optimized Heatseeking Pacman"
-        
-        # Heatmap for tracking the Ghost
+        # TODO: Initialize any data structures you need
+        # Examples:
+        # - self.path = []  # Store planned path
+        # - self.visited = set()  # Track visited positions
+        self.name = "Heatseeking Pacman"
         self.heatmap = np.ones((21, 21), float)
         self.kernel = ((0.0, 0.2, 0.0),
                        (0.2, 0.2, 0.2),
                        (0.0, 0.2, 0.0),)
-        
-        # Optimization 1: Global Memory Map for Pacman
-        self.memory_map = np.full((21, 21), -1, dtype=int)
-        self.visit_count = np.zeros((21, 21), dtype=int)
-        
-        # Optimization 2: Target Persistence management
+        # Memory for limited observation mode
+        self.last_known_enemy_pos = None
         self.current_target = None
-        self.last_pos = None  # Remember previous position to prevent backtracking
-
-    def _update_memory(self, local_map_state: np.ndarray):
-        """Permanently record visible cells into memory."""
-        visible_mask = local_map_state != -1
-        self.memory_map[visible_mask] = local_map_state[visible_mask]
+        self.visit_count = np.zeros((21, 21), dtype=int)
 
     def step(self, map_state: np.ndarray,
              my_position: tuple,
              enemy_position: tuple,
              step_number: int):
-        try:
-            # 1. Update memory and increment visit count for the current tile
-            self._update_memory(map_state)
-            self.visit_count[my_position] += 1
+        """
+        Decide the next move.
 
-            # 2. Update Heatmap
-            self.update_heatmap(map_state, enemy_position)
-            max_heat = np.max(self.heatmap)
+        Args:
+            map_state: 2D numpy array where 1=wall, 0=empty, -1=unseen (fog)
+            my_position: Your current (row, col) in absolute coordinates
+            enemy_position: Ghost's (row, col) if visible, None otherwise
+            step_number: Current step number (starts at 1)
 
-            # 3. CHOOSE TARGET (With Target Persistence mechanism)
-            if max_heat >= 0.001:
-                # Priority 1: Ghost scent detected -> Immediately switch to hunting mode
-                candidates = np.argwhere(self.heatmap >= max_heat * 0.9)
-                general_target = tuple(candidates[0].tolist())
-                
-                visible_tiles = np.argwhere(map_state == 0)
-                visible_candidates = tuple(tuple(row) for row in visible_tiles.tolist())
-                if visible_candidates:
-                    self.current_target = min(visible_candidates, key=lambda c: self._manhattan_distance(c, general_target))
-                else:
-                    self.current_target = general_target
-            else:
-                # Priority 2: Exploration mode
-                # Only pick a new gateway if there is NO target, target is REACHED, or target became a wall/cleared fog
-                need_new_target = (
-                    self.current_target is None or 
-                    my_position == self.current_target or 
-                    self.memory_map[self.current_target] == 1 or
-                    (map_state[self.current_target] != -1 and self.current_target == my_position)
-                )
+        Returns:
+            Move or (Move, steps): Direction to move (optionally with step count)
+        """
+        # TODO: Implement your search algorithm here
+        self.visit_count[my_position] += 1
 
-                if need_new_target:
-                    visible_tiles = np.argwhere(map_state == 0)
-                    visible_candidates = tuple(tuple(row) for row in visible_tiles.tolist())
-                    gateway_candidates = self.get_gateways(my_position, visible_candidates, map_state)
+        visible_tiles = np.argwhere(map_state == 0)
+        visible_candidates = tuple(tuple(row) for row in visible_tiles.tolist())
+        gateway_candidates = self.get_gateways(my_position, visible_candidates, map_state)
 
-                    if gateway_candidates:
-                        # Optimization 3: Choose gateway with shortest distance + Penalize frequently visited tiles
-                        best_gate = None
-                        min_score = float('inf')
-                        
-                        for gate in gateway_candidates:
-                            dist = self._manhattan_distance(my_position, gate)
-                            penalty = self.visit_count[gate] * 15  # Increased penalty weight to 15
-                            
-                            # Heavily penalize if the gateway is at the exact position we just turned away from
-                            if self.last_pos and gate == self.last_pos:
-                                penalty += 100
-                                
-                            score = dist + penalty
-                            if score < min_score:
-                                min_score = score
-                                best_gate = gate
-                                
-                        self.current_target = best_gate
+        # Update heatmap
+        self.update_heatmap(map_state, enemy_position)
 
-            # 4. A* PATHFINDING (Use global memory_map instead of local map_state)
-            path = []
-            if self.current_target:
-                path = self.a_star(my_position, self.current_target, self.memory_map, include_fog=True)
+        # Choose target
+        max_heat = np.max(self.heatmap)
+        # if enemy_position:
+        #     self.current_target = enemy_position
+        # elif self.current_target is not None and self.current_target != my_position:
+        #     self.current_target = self.current_target
+        if max_heat >= 0.001:
+            candidates = np.argwhere(self.heatmap >= max_heat * 0.9)
+            general_target = tuple(candidates[0].tolist())
+            # Choose visible tile closest to max heat
+            self.current_target = min(visible_candidates, key=lambda c: self._manhattan_distance(c, general_target))
+        else:
+            # Frontier exploring
+            non_wall_tiles = np.argwhere(map_state != 1)
+            min_visits = np.min(self.visit_count[map_state != 1])
+            least_visited = [tuple(t) for t in non_wall_tiles if self.visit_count[t[0], t[1]] == min_visits]
+            global_fallback = min(least_visited, key=lambda c: self._manhattan_distance(c, my_position))
+            self.current_target = min(gateway_candidates,
+                                      key=lambda c: self._manhattan_distance(c, global_fallback) + self.visit_count[
+                                          c] * 5)
 
-            # 5. MOVE & STEP OPTIMIZATION
-            move = Move.STAY
-            step = 1
+        path = self.a_star(my_position, self.current_target, map_state, False)
 
-            if len(path) > 1:
-                step1 = path[1]
+        # Path processing
+        move = Move.STAY
+        step = 1
 
-                if step1[0] == my_position[0]:
-                    move = Move.LEFT if step1[1] < my_position[1] else Move.RIGHT
-                elif step1[1] == my_position[1]:
-                    move = Move.UP if step1[0] < my_position[0] else Move.DOWN
+        if len(path) > 1:
+            step1 = path[1]
 
-                # Check if we can move 2 steps straight (Privilege when pacman_speed >= 2)
-                if len(path) > 2 and self.pacman_speed >= 2:
-                    step2 = path[2]
-                    is_straight = (step1[0] == my_position[0] and step2[0] == step1[0]) or \
-                                  (step1[1] == my_position[1] and step2[1] == step1[1])
-                    
-                    if is_straight and self.memory_map[step2] == 0:
-                        step = 2
+            if step1[0] == my_position[0]:
+                if step1[1] < my_position[1]:
+                    move = Move.LEFT
+                elif step1[1] > my_position[1]:
+                    move = Move.RIGHT
+            elif step1[1] == my_position[1]:
+                if step1[0] < my_position[0]:
+                    move = Move.UP
+                elif step1[0] > my_position[0]:
+                    move = Move.DOWN
 
-            # Remember current position to prevent backtracking in the next frame
-            self.last_pos = my_position
-            return (move, step)
+            if len(path) > 2:
+                step2 = path[2]
+                if (step1[0] == my_position[0] and step2[0] == step1[0]) or (
+                        step1[1] == my_position[1] and step2[1] == step1[1]):
+                    step = 2
+                    self.visit_count[step1] += 1
 
-        except Exception as e:
-            # Safe fallback in case of errors
-            for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
-                next_pos = self._apply_move(my_position, move)
-                if self._is_valid_position(next_pos, map_state, False):
-                    return (move, 1)
-            return (Move.STAY, 1)
+        return (move, step)
 
     def update_heatmap(self, map_state: np.ndarray, enemy_position: tuple | None):
+        # Clear heat from walls
         self.heatmap[map_state == 1] = 0.0
+
         if enemy_position:
+            # Collapse heat into enemy if seen
             self.heatmap.fill(0.0)
             self.heatmap[enemy_position] = 1.0
         else:
+            # Decay
             self.heatmap *= 0.9
+            # Diffusion
             P = np.pad(self.heatmap, 1, mode='constant', constant_values=0)
-            self.heatmap = 0.2 * (P[1:-1, 1:-1] + P[:-2, 1:-1] + P[2:, 1:-1] + P[1:-1, :-2] + P[1:-1, 2:])
+            self.heatmap = 0.2 * (
+                    P[1:-1, 1:-1] + P[:-2, 1:-1] + P[2:, 1:-1] + P[1:-1, :-2] + P[1:-1, 2:]
+            )
+            # Clear heat from seen paths and walls
             visible_mask = map_state != -1
             self.heatmap[visible_mask] = 0.0
 
-    def a_star(self, start_pos: tuple, end_pos: tuple, grid_map: np.ndarray, include_fog: bool):
-        """A* search on the provided grid map (prioritizes memory_map)."""
-        frontier_heap = []
-        frontier = set()
+    def a_star(self, start_pos: tuple, end_pos: tuple, map_state: np.ndarray, include_fog: bool):
+        frontier_heap = []  # Priority queue (heapq)
+        frontier = set()  # Sort of a tracker for the frontier. Needed because we use lazy deletion when updating the heapq.
         explored = set()
 
+        # Track parents and costs using dictionaries (i don't know if we're allowed to add a Node class)
         parent = {start_pos: None}
         g_cost = {start_pos: 0}
         h_cost = {start_pos: self._manhattan_distance(start_pos, end_pos)}
         f_cost = {start_pos: g_cost[start_pos] + h_cost[start_pos]}
 
+        # Push start pos into frontier. Use tuple for priority order (f-cost -> h-cost -> coordinate itself as fallback)
         heapq.heappush(frontier_heap, (f_cost[start_pos], h_cost[start_pos], start_pos))
         frontier.add(start_pos)
 
+        # Loop through frontier
         iterations = 0
         while frontier:
             current_node = heapq.heappop(frontier_heap)[2]
 
+            # Handle old duplicates left behind by lazy deletion.
             if current_node not in frontier:
                 continue
 
+            # Found target or reached max iterations
             if current_node == end_pos or iterations >= 128:
                 path = []
                 while current_node in parent:
@@ -469,22 +460,21 @@ class PacmanAgent(BasePacmanAgent):
                 path.reverse()
                 return path
 
+            # Move node to explored
             explored.add(current_node)
             frontier.remove(current_node)
 
-            neighbors = self._get_neighbors(current_node, grid_map, include_fog)
+            # Process neighbors
+            neighbors = self._get_neighbors(current_node, map_state, include_fog)
             for neighbor in neighbors:
                 if neighbor in explored:
                     continue
 
-                # Add penalty to g_cost for frequently visited tiles (prevents looping)
-                step_cost = 1 + (self.visit_count[neighbor] * 2)
-                new_g_cost = g_cost[current_node] + step_cost
-                
+                new_g_cost = g_cost[current_node] + 1
                 if neighbor not in frontier:
                     h_cost[neighbor] = self._manhattan_distance(neighbor, end_pos)
                     frontier.add(neighbor)
-                    g_cost[neighbor] = float('inf')
+                    g_cost[neighbor] = 1024  # Placeholder g-cost for the second if
 
                 if new_g_cost < g_cost[neighbor]:
                     parent[neighbor] = current_node
@@ -494,10 +484,13 @@ class PacmanAgent(BasePacmanAgent):
 
             iterations += 1
 
+        # If no path is found
+        print("PACMAN A* FAILED")
         return []
 
     def get_gateways(self, my_pos: tuple, visible_tiles: tuple, map_state: np.ndarray):
         gateways = []
+        # Choose tiles that border the fog
         for pos in visible_tiles:
             borders_fog = False
             for neighbor in self._get_neighbors(pos, map_state, include_fog=True):
@@ -507,6 +500,7 @@ class PacmanAgent(BasePacmanAgent):
             if borders_fog:
                 gateways.append(pos)
 
+        # If no fog, choose furthest visible tiles
         if len(gateways) == 0:
             for pos in visible_tiles:
                 edge = True
@@ -519,26 +513,35 @@ class PacmanAgent(BasePacmanAgent):
 
         return gateways
 
+    # Helper methods
     def _apply_move(self, pos, move):
+        """Apply a move to a position, return new position."""
         delta_row, delta_col = move.value
         return (pos[0] + delta_row, pos[1] + delta_col)
 
     def _get_neighbors(self, pos, map_state, include_fog):
+        """Get all valid neighboring positions and their moves."""
         neighbors = []
+
         for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
             next_pos = self._apply_move(pos, move)
             if self._is_valid_position(next_pos, map_state, include_fog):
                 neighbors.append(next_pos)
+
         return neighbors
 
     def _manhattan_distance(self, pos1, pos2):
+        """Calculate Manhattan distance between two positions."""
         return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
 
     def _is_valid_position(self, pos: tuple, map_state: np.ndarray, include_fog: bool) -> bool:
+        """Check if a position is valid (not a wall and within bounds)."""
         row, col = pos
         height, width = map_state.shape
+
         if row < 0 or row >= height or col < 0 or col >= width:
             return False
+
         if include_fog:
             return map_state[row, col] != 1
         else:
