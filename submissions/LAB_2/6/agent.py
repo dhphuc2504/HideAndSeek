@@ -4,19 +4,14 @@ from typing import Tuple, Optional
 from environment import Move
 from agent_interface import GhostAgent as BaseGhostAgent
 
-class GhostAgent(BaseGhostAgent):
-    """
-    Stealth Ghost Agent (Lab 2)
-    Uses persistent memory mapping, shadow-camping, and LOS-breaking to survive.
-    """
-    
+class GhostAgent(BaseGhostAgent):    
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # 1. The Global Memory Map (Starts completely unknown: -1)
+        # The Global Memory Map (Starts completely unknown: -1)
         # We assume max size is 21x21 based on the PDF.
         self.memory_map = np.full((21, 21), -1, dtype=int)
         
-        # 2. State tracking
+        # State tracking
         self.last_known_pacman = None
         self.turns_since_seen = 999
         self.current_hideout = None
@@ -28,7 +23,7 @@ class GhostAgent(BaseGhostAgent):
         Overlays the visible local map onto the global memory map.
         Everything the Ghost sees is remembered permanently.
         """
-        # Find all cells in the local map that are NOT fog (-1)
+        # Find all cells in the local map that are not fog (-1)
         # and copy them into our persistent memory.
         visible_mask = local_map_state != -1
         self.memory_map[visible_mask] = local_map_state[visible_mask]
@@ -40,6 +35,9 @@ class GhostAgent(BaseGhostAgent):
         """
         r1, c1 = pos1
         r2, c2 = pos2
+
+        if abs(r1 - r2) > 5 or abs(c1 - c2) > 5:
+            return False
         
         if r1 == r2:
             c_min, c_max = min(c1, c2), max(c1, c2)
@@ -62,35 +60,26 @@ class GhostAgent(BaseGhostAgent):
              enemy_position: Optional[Tuple[int, int]],
              step_number: int) -> Move:
              
-        # 1. Update our mental map with what we can currently see
+        # Update our mental map with what we can currently see
         self._update_memory(map_state)
+
+        if enemy_position is not None:
+            if not self._is_in_line_of_sight(my_position, enemy_position):
+                enemy_position = None
         
-        # 2. Track Pacman's whereabouts
+        # Track Pacman's whereabouts
         if enemy_position is not None:
             self.last_known_pacman = enemy_position
             self.turns_since_seen = 0
         else:
             self.turns_since_seen += 1
 
-        # ---------------------------------------------------------
-        # STATE MACHINE LOGIC
-        # ---------------------------------------------------------
-        
         if self.turns_since_seen == 0:
-            # STATE: SPOTTED! PACMAN IS IN VISION!
-            # Objective: Break Line of Sight immediately.
             best_move = self._execute_panic_flee(my_position, enemy_position)
-            
         elif self.turns_since_seen < 4:
-            # STATE: PARANOID. We just broke vision, but Pacman is close.
-            # Objective: Keep moving away from his last known location.
             best_move = self._execute_relocate(my_position)
-            
         else:
-            # STATE: HIDDEN. Pacman has no idea where we are.
-            # Objective: Find a dark corner/intersection, go there, and STAY.
             best_move = self._execute_hide(my_position)
-
 
         self.last_pos = my_position
         return best_move
@@ -127,7 +116,7 @@ class GhostAgent(BaseGhostAgent):
         
     def _execute_relocate(self, my_pos: Tuple[int, int]) -> Move:
         """
-        Pacman just lost sight of us, but he is investigating our Last Known Position!
+        Pacman just lost sight of us, but he is investigating our Last Known Position
         Goal: Run away from his last known position, prioritizing taking turns to confuse him.
         """
         if self.last_known_pacman is None:
@@ -140,19 +129,19 @@ class GhostAgent(BaseGhostAgent):
             nr, nc = my_pos[0] + move.value[0], my_pos[1] + move.value[1]
             
             if 0 <= nr < 21 and 0 <= nc < 21 and self.memory_map[nr, nc] == 0:
-                # 1. Get further away from Pacman's last known location
+                # Get further away from Pacman's last known location
                 dist_from_pacman = abs(nr - self.last_known_pacman[0]) + abs(nc - self.last_known_pacman[1])
                 
-                # 2. Count valid moves to find intersections
+                # Count valid moves to find intersections
                 valid_moves = 0
                 for next_m in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
                     r2, c2 = nr + next_m.value[0], nc + next_m.value[1]
-                    if 0 <= r2 < 21 and 0 <= c2 < 21 and self.memory_map[r2, c2] == 0:
+                    if 0 <= r2 < 21 and 0 <= c2 < 21 and self.memory_map[r2, c2] in [0, -1]:
                         valid_moves += 1
                 
                 score = (dist_from_pacman * 10)
                 
-                # If we hit an intersection, massive bonus! It splits Pacman's search tree.
+                # Got a bonus when we hit the intersection
                 if valid_moves >= 3:
                     score += 50
                     
@@ -168,24 +157,56 @@ class GhostAgent(BaseGhostAgent):
 
     def _execute_hide(self, my_pos: Tuple[int, int]) -> Move:
         """
-        Goal: Stand perfectly still to avoid accidental encounters, UNLESS we are in a dead end.
-        Strictly only evaluates KNOWN empty tiles (0) to satisfy partial observability rules.
+        Active Hide: Seek the deep corners of the map! 
+        Avoids straight hallways, defuses dead ends, and creeps away from the center.
         """
-        valid_moves = []
+        structural_moves = [] 
+        safe_moves = []       
+        
         for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
             nr, nc = my_pos[0] + move.value[0], my_pos[1] + move.value[1]
             if 0 <= nr < 21 and 0 <= nc < 21:
-                # STRICT COMPLIANCE: Only look at confirmed safe paths
-                if self.memory_map[nr, nc] == 0: 
-                    valid_moves.append(move)
+                if self.memory_map[nr, nc] in [0, -1]:
+                    structural_moves.append(move)
+                if self.memory_map[nr, nc] == 0:
+                    safe_moves.append(move)
+                    
+        # Check if we are in a straight kill-zone
+        is_straight_hallway = False
+        if len(structural_moves) == 2:
+            m1, m2 = structural_moves
+            if m1.value[0] + m2.value[0] == 0 and m1.value[1] + m2.value[1] == 0:
+                is_straight_hallway = True
+                
+        # Calculate how far we are from the exact center of the map (10, 10)
+        dist_from_center = abs(my_pos[0] - 10) + abs(my_pos[1] - 10)
+        
+        # If we are NOT in a straight hallway, and NOT in a dead end...
+        if not is_straight_hallway and len(structural_moves) >= 2:
+            # AND we are deep in the outer perimeter of the map (Threshold: 12+ tiles away)
+            if dist_from_center >= 12:
+                # We have reached the ultimate hiding spot
+                return Move.STAY
 
-        if len(valid_moves) >= 2:
-            return Move.STAY
+        # We need to keep moving (either to escape the center, a hallway, or a dead end)
+        best_move = Move.STAY
+        best_score = -float('inf')
+        
+        for move in safe_moves:
+            nr, nc = my_pos[0] + move.value[0], my_pos[1] + move.value[1]
             
-        if len(valid_moves) == 1:
-            return valid_moves[0]
+            # Prevent vibrating back and forth (unless we are in a dead end and MUST turn around)
+            if len(safe_moves) > 1 and self.last_pos is not None and (nr, nc) == self.last_pos:
+                continue
+                
+            # Score this move based on how far it pushes us into the map corners!
+            score = abs(nr - 10) + abs(nc - 10)
             
-        return Move.STAY
+            if score > best_score:
+                best_score = score
+                best_move = move
+                
+        return best_move
 
     def _fallback_flee(self, my_pos: Tuple[int, int], pacman_pos: Tuple[int, int]) -> Move:
         """
@@ -197,7 +218,6 @@ class GhostAgent(BaseGhostAgent):
         for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
             nr, nc = my_pos[0] + move.value[0], my_pos[1] + move.value[1]
             if 0 <= nr < 21 and 0 <= nc < 21:
-                # STRICT COMPLIANCE: Never assume -1 is safe! Only walk on 0.
                 if self.memory_map[nr, nc] == 0:
                     dist = abs(nr - pacman_pos[0]) + abs(nc - pacman_pos[1])
                     if dist > best_dist:
