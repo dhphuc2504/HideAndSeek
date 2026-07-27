@@ -1,8 +1,10 @@
 import numpy as np
+import heapq
 from collections import deque
 from typing import Tuple, Optional
 from environment import Move
 from agent_interface import GhostAgent as BaseGhostAgent
+from agent_interface import PacmanAgent as BasePacmanAgent
 
 class GhostAgent(BaseGhostAgent):    
     def __init__(self, **kwargs):
@@ -17,6 +19,10 @@ class GhostAgent(BaseGhostAgent):
         self.current_hideout = None
 
         self.last_pos = None
+
+        self.camp_timer = 0
+        self.is_roaming = False
+        self.roam_steps_left = 0
 
     def _update_memory(self, local_map_state: np.ndarray):
         """
@@ -60,42 +66,99 @@ class GhostAgent(BaseGhostAgent):
              enemy_position: Optional[Tuple[int, int]],
              step_number: int) -> Move:
              
-        # Update our mental map with what we can currently see
+        # Update our mental map (revealing the -1 fog)
         self._update_memory(map_state)
-
-        is_visible = False
+        
+        # Track Pacman's whereabouts under TRUE Fog of War
         if enemy_position is not None:
-            is_visible = self._is_in_line_of_sight(my_position, enemy_position)
-
-            self.last_known_pacman = enemy_position
-
-            if is_visible:
-                # PACMAN IS LOOKING AT US
+            # The Arena says Pacman is in our 5-tile vision cross.
+            # Double-check Line of Sight just to be mathematically safe against walls.
+            if self._is_in_line_of_sight(my_position, enemy_position):
+                self.last_known_pacman = enemy_position
                 self.turns_since_seen = 0
-            else:
-                # PACMAN IS BEHIND A WALL!
-                # Calculate how close he is using Manhattan distance
-                dist = abs(my_position[0] - enemy_position[0]) + abs(my_position[1] - enemy_position[1])
 
-                if dist <= 8:
-                    # TREMORSENSE TRIGGERED: We hear his footsteps
-                    # Wake up from Deep Sleep and start sneaking away
-                    self.turns_since_seen = 1 
-                else:
-                    # He is far away. Safe to sleep.
-                    self.turns_since_seen = 999
+                # PACMAN SPOTTED! Reset all migration timers!
+                self.camp_timer = 0
+                self.is_roaming = False
+                self.roam_steps_left = 0
+
+            else:
+                self.turns_since_seen += 1
         else:
-            # The Arena is working properly and not leaking coordinates.
+            # Pacman is completely lost in the fog.
             self.turns_since_seen += 1
 
+        # ---------------------------------------------------------
+        # STATE MACHINE LOGIC
+        # ---------------------------------------------------------
         if self.turns_since_seen == 0:
-            best_move = self._execute_panic_flee(my_position, enemy_position)
+            best_move = self._execute_panic_flee(my_position, self.last_known_pacman)
+            
         elif self.turns_since_seen < 4:
             best_move = self._execute_relocate(my_position)
+            
         else:
-            best_move = self._execute_hide(my_position)
+            # -----------------------------------------------------
+            # THE MIGRATION SYSTEM
+            # -----------------------------------------------------
+            if self.is_roaming:
+                # Actively moving to a new quadrant of the map
+                best_move = self._execute_roam(my_position)
+                self.roam_steps_left -= 1
+                
+                # If we've walked enough steps, go back to hiding!
+                if self.roam_steps_left <= 0:
+                    self.is_roaming = False
+            else:
+                best_move = self._execute_hide(my_position)
+                
+                # If the Ghost decided to sleep in a corner, tick the timer!
+                if best_move == Move.STAY:
+                    self.camp_timer += 1
+                    
+                    # If we've camped for 25 turns, it's time to migrate!
+                    if self.camp_timer >= 7:
+                        self.is_roaming = True
+                        self.roam_steps_left = 12 # Walk toward center for 12 turns
+                        self.camp_timer = 0
+                else:
+                    # If the Ghost is still creeping to the corner, reset timer
+                    self.camp_timer = 0
 
         self.last_pos = my_position
+        return best_move
+
+    def _execute_roam(self, my_pos: Tuple[int, int]) -> Move:
+        """
+        Migration Phase: Walk toward the center of the map.
+        This pulls the Ghost out of its old hiding spot so the Corner Creeper 
+        will push it into a new quadrant later!
+        """
+        best_move = Move.STAY
+        best_score = float('inf') # We want to MINIMIZE distance to center!
+        
+        safe_moves = []
+        for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
+            nr, nc = my_pos[0] + move.value[0], my_pos[1] + move.value[1]
+            if 0 <= nr < 21 and 0 <= nc < 21 and self.memory_map[nr, nc] == 0:
+                safe_moves.append((move, nr, nc))
+                
+        for move, nr, nc in safe_moves:
+            # Keep momentum: Do not backtrack unless it's a dead end
+            if len(safe_moves) > 1 and self.last_pos is not None and (nr, nc) == self.last_pos:
+                continue
+                
+            # Score: Lower is better (closer to the center)
+            score = abs(nr - 10) + abs(nc - 10)
+            
+            if score < best_score:
+                best_score = score
+                best_move = move
+                
+        # Fallback if trapped
+        if best_move == Move.STAY and safe_moves:
+            return safe_moves[0][0]
+            
         return best_move
 
     def _execute_panic_flee(self, my_pos: Tuple[int, int], pacman_pos: Tuple[int, int]) -> Move:
@@ -241,6 +304,7 @@ class GhostAgent(BaseGhostAgent):
                             best_move = move
                             
         return best_move
+    
 class PacmanAgent(BasePacmanAgent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
