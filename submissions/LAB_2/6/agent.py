@@ -63,15 +63,29 @@ class GhostAgent(BaseGhostAgent):
         # Update our mental map with what we can currently see
         self._update_memory(map_state)
 
+        is_visible = False
         if enemy_position is not None:
-            if not self._is_in_line_of_sight(my_position, enemy_position):
-                enemy_position = None
-        
-        # Track Pacman's whereabouts
-        if enemy_position is not None:
+            is_visible = self._is_in_line_of_sight(my_position, enemy_position)
+
             self.last_known_pacman = enemy_position
-            self.turns_since_seen = 0
+
+            if is_visible:
+                # PACMAN IS LOOKING AT US
+                self.turns_since_seen = 0
+            else:
+                # PACMAN IS BEHIND A WALL!
+                # Calculate how close he is using Manhattan distance
+                dist = abs(my_position[0] - enemy_position[0]) + abs(my_position[1] - enemy_position[1])
+
+                if dist <= 8:
+                    # TREMORSENSE TRIGGERED: We hear his footsteps
+                    # Wake up from Deep Sleep and start sneaking away
+                    self.turns_since_seen = 1 
+                else:
+                    # He is far away. Safe to sleep.
+                    self.turns_since_seen = 999
         else:
+            # The Arena is working properly and not leaking coordinates.
             self.turns_since_seen += 1
 
         if self.turns_since_seen == 0:
